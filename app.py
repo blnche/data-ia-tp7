@@ -1,5 +1,8 @@
 import os
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
