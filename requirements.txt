@@ -1,0 +1,9 @@
+streamlit==1.45.0
+langchain==0.3.28
+langchain-community==0.3.31
+langchain-ollama==0.3.10
+chromadb==1.0.0
+pymupdf==1.26.5
+sentence-transformers==5.1.2
+pdfminer.six==20221105
+pillow==11.3.0

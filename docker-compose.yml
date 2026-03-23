@@ -1,0 +1,19 @@
+services:
+  sanofi-rag:
+    build: .
+    container_name: sanofi-rag-app
+    ports:
+      - "8501:8501"
+    volumes:
+      # Persister la base vectorielle ChromaDB entre les redémarrages
+      - chroma_data:/app/chroma_sanofi
+    environment:
+      # Sur Mac/Windows, host.docker.internal pointe vers la machine hôte
+      # Sur Linux, utiliser l'IP du bridge Docker (172.17.0.1)
+      - OLLAMA_BASE=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # nécessaire sur Linux
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
