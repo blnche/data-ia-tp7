@@ -1,12 +1,11 @@
-import streamlit as st
-import shutil
 import os
+import streamlit as st
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain_ollama import OllamaLLM
+from langchain_groq import ChatGroq
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain.schema import Document
@@ -14,9 +13,9 @@ from langchain.schema import Document
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 PDF_PATH    = "SANOFI-Integrated-Annual-Report-2022-EN.pdf"
-OLLAMA_BASE = os.environ.get("OLLAMA_BASE", "http://localhost:11434")
-LLM_MODEL   = "dolphin-llama3:8b"
-EMBED_MODEL = "nomic-embed-text"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+LLM_MODEL   = "llama3-8b-8192"
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 CHROMA_DIR  = "./chroma_sanofi"
 
 PROMPT_TEMPLATE = """You are an expert analyst of Sanofi's 2022 Annual Report.
@@ -54,23 +53,12 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500&display=swap');
 
-    html, body, [class*="css"] {
-        font-family: 'DM Sans', sans-serif;
-    }
-
-    /* Main background */
-    .stApp {
-        background-color: #0f0f14;
-        color: #e8e8f0;
-    }
-
-    /* Sidebar */
+    html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+    .stApp { background-color: #0f0f14; color: #e8e8f0; }
     [data-testid="stSidebar"] {
         background-color: #16161f;
         border-right: 1px solid #2a2a3a;
     }
-
-    /* Header */
     .main-header {
         font-family: 'DM Serif Display', serif;
         font-size: 2.2rem;
@@ -84,8 +72,6 @@ st.markdown("""
         font-weight: 300;
         margin-bottom: 2rem;
     }
-
-    /* Chat messages */
     .user-message {
         background: #1e1e2e;
         border: 1px solid #2a2a3a;
@@ -117,27 +103,6 @@ st.markdown("""
         margin-bottom: 6px;
         opacity: 0.5;
     }
-
-    /* Suggested question pills */
-    .question-pill {
-        display: inline-block;
-        background: #1a1a28;
-        border: 1px solid #2a2a3a;
-        border-radius: 20px;
-        padding: 6px 14px;
-        font-size: 0.82rem;
-        color: #a0a0c0;
-        margin: 4px;
-        cursor: pointer;
-        transition: all 0.2s;
-    }
-    .question-pill:hover {
-        border-color: #7c3aed;
-        color: #c4b5fd;
-        background: #1e1a2e;
-    }
-
-    /* Status badge */
     .status-badge {
         display: inline-flex;
         align-items: center;
@@ -152,13 +117,6 @@ st.markdown("""
         color: #4ade80;
         border: 1px solid #166534;
     }
-    .status-loading {
-        background: #1c1917;
-        color: #fbbf24;
-        border: 1px solid #92400e;
-    }
-
-    /* Input */
     .stTextInput > div > div > input {
         background: #1a1a28 !important;
         border: 1px solid #2a2a3a !important;
@@ -169,27 +127,15 @@ st.markdown("""
         border-color: #7c3aed !important;
         box-shadow: 0 0 0 2px #7c3aed22 !important;
     }
-
-    /* Buttons */
     .stButton > button {
         background: #7c3aed !important;
         color: white !important;
         border: none !important;
         border-radius: 8px !important;
         font-weight: 500 !important;
-        transition: all 0.2s !important;
     }
-    .stButton > button:hover {
-        background: #6d28d9 !important;
-        transform: translateY(-1px);
-    }
-
-    /* Divider */
-    hr {
-        border-color: #2a2a3a !important;
-    }
-
-    /* Scrollbar */
+    .stButton > button:hover { background: #6d28d9 !important; }
+    hr { border-color: #2a2a3a !important; }
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #0f0f14; }
     ::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 3px; }
@@ -200,9 +146,7 @@ st.markdown("""
 
 @st.cache_resource(show_spinner=False)
 def init_rag():
-    """Load PDF, build vector store, return qa_chain. Cached after first run."""
-
-    # Load
+    # Load PDF
     loader = PyMuPDFLoader(PDF_PATH)
     pages = loader.load()
 
@@ -218,49 +162,57 @@ def init_rag():
     dupixent_chunks = [c for c in chunks if "dupixent" in c.page_content.lower()]
     sales_chunks    = [c for c in chunks if "18.3" in c.page_content or "specialty care" in c.page_content.lower()]
 
-    # Embed & store
-    if os.path.exists(CHROMA_DIR):
-        for item in os.listdir(CHROMA_DIR):
-            item_path = os.path.join(CHROMA_DIR, item)
-            if os.path.isfile(item_path):
-                os.remove(item_path)
-            elif os.path.isdir(item_path):
-                shutil.rmtree(item_path)
-
-    embeddings = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE)
-    vectorstore = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        persist_directory=CHROMA_DIR
+    # HuggingFace embeddings — tourne en local, pas besoin d'API
+    embeddings = HuggingFaceEmbeddings(
+        model_name=EMBED_MODEL,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True}
     )
 
-    # Fallback injection
-    fallback_docs = []
-    if len(dupixent_chunks) == 0:
-        fallback_docs.append(Document(
-            page_content="""Dupixent (dupilumab) major advances in 2022:
+    # Vector store — recharge si existe déjà, crée sinon
+    if os.path.exists(CHROMA_DIR) and os.listdir(CHROMA_DIR):
+        vectorstore = Chroma(
+            persist_directory=CHROMA_DIR,
+            embedding_function=embeddings
+        )
+    else:
+        vectorstore = Chroma.from_documents(
+            documents=chunks,
+            embedding=embeddings,
+            persist_directory=CHROMA_DIR
+        )
+
+        # Fallback injection
+        fallback_docs = []
+        if len(dupixent_chunks) == 0:
+            fallback_docs.append(Document(
+                page_content="""Dupixent (dupilumab) major advances in 2022:
 - Approved in the US for eosinophilic esophagitis
 - Approved in the US for prurigo nodularis
 - Approved in the US to treat atopic dermatitis in children aged 6 months to 5 years
 - Approved in the EU as first biologic for children aged 6-11 with severe asthma
-- Over 500,000 patients treated; more than half a dozen new indications under investigation""",
-            metadata={"source": "page_15", "page": 15}
-        ))
-    if len(sales_chunks) == 0:
-        fallback_docs.append(Document(
-            page_content="""Sanofi 2022 sales breakdown:
+- Over 500,000 patients treated""",
+                metadata={"source": "page_15", "page": 15}
+            ))
+        if len(sales_chunks) == 0:
+            fallback_docs.append(Document(
+                page_content="""Sanofi 2022 sales breakdown:
 Total: 43 billion euros (+7% CER)
 Specialty Care: 16.5B (+19.4%) | General Medicines: 14.2B (-4.2%)
 Vaccines: 7.2B (+6.3%) | Consumer Healthcare: 5.1B (+8.6%)
-United States: 18.3B (+12.2%) | Europe: 10.0B (+2.4%) | Rest of world: 14.7B (+4.8%)
-Business EPS: 8.26 euros (+17.1%)""",
-            metadata={"source": "page_40", "page": 40}
-        ))
-    if fallback_docs:
-        vectorstore.add_documents(fallback_docs)
+United States: 18.3B (+12.2%) | Europe: 10.0B (+2.4%) | Rest of world: 14.7B (+4.8%)""",
+                metadata={"source": "page_40", "page": 40}
+            ))
+        if fallback_docs:
+            vectorstore.add_documents(fallback_docs)
 
-    # LLM + chain
-    llm = OllamaLLM(model=LLM_MODEL, base_url=OLLAMA_BASE, temperature=0.1)
+    # Groq LLM
+    llm = ChatGroq(
+        model=LLM_MODEL,
+        api_key=GROQ_API_KEY,
+        temperature=0.1
+    )
+
     prompt = PromptTemplate(
         template=PROMPT_TEMPLATE,
         input_variables=["context", "question"]
@@ -286,13 +238,11 @@ Business EPS: 8.26 euros (+17.1%)""",
 with st.sidebar:
     st.markdown("### 💊 Sanofi RAG")
     st.markdown("---")
-
     st.markdown("**Document**")
-    st.markdown(f"📄 Rapport Annuel 2022")
-    st.markdown(f"📑 43 pages · 119 chunks")
-    st.markdown(f"🧠 `{LLM_MODEL}`")
-    st.markdown(f"🔍 `{EMBED_MODEL}`")
-
+    st.markdown("📄 Rapport Annuel 2022")
+    st.markdown("📑 43 pages · 119 chunks")
+    st.markdown(f"🧠 `{LLM_MODEL}` via Groq")
+    st.markdown(f"🔍 `all-MiniLM-L6-v2`")
     st.markdown("---")
     st.markdown("**Questions suggérées**")
 
@@ -300,6 +250,7 @@ with st.sidebar:
         short = q[:55] + "..." if len(q) > 55 else q
         if st.button(short, key=f"suggested_{i}", use_container_width=True):
             st.session_state["prefill"] = q
+            st.rerun()
 
     st.markdown("---")
     if st.button("🗑️ Effacer la conversation", use_container_width=True):
@@ -309,9 +260,13 @@ with st.sidebar:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 st.markdown('<div class="main-header">Sanofi Annual Report 2022</div>', unsafe_allow_html=True)
-st.markdown('<div class="main-subtitle">Posez vos questions sur le rapport annuel · Powered by RAG + Ollama</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-subtitle">Posez vos questions sur le rapport annuel · Powered by RAG + Groq</div>', unsafe_allow_html=True)
 
-# Init RAG
+# Vérifier que la clé API est présente
+if not GROQ_API_KEY:
+    st.error("⚠️ GROQ_API_KEY manquante. Ajoute-la dans les secrets Streamlit ou en variable d'environnement.")
+    st.stop()
+
 with st.spinner("⚙️ Initialisation du pipeline RAG..."):
     try:
         qa_chain, n_chunks = init_rag()
@@ -322,11 +277,9 @@ with st.spinner("⚙️ Initialisation du pipeline RAG..."):
 
 st.markdown("")
 
-# Session state
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
-# Display history
 for msg in st.session_state["messages"]:
     if msg["role"] == "user":
         st.markdown(f"""
@@ -341,10 +294,9 @@ for msg in st.session_state["messages"]:
             {msg["content"]}
         </div>""", unsafe_allow_html=True)
 
-# Input
+# Prefill fix
 if "prefill" in st.session_state:
-    prefill = st.session_state.pop("prefill")
-    st.session_state["question_input"] = prefill
+    st.session_state["question_input"] = st.session_state.pop("prefill")
 
 question = st.text_input(
     "Votre question",
@@ -358,14 +310,9 @@ with col1:
     send = st.button("Envoyer →", use_container_width=True)
 
 if send and question.strip():
-    # Add user message
     st.session_state["messages"].append({"role": "user", "content": question})
-
-    # Run RAG
     with st.spinner("🔍 Recherche en cours..."):
         result = qa_chain.invoke({"query": question})
         answer = result["result"]
-
-    # Add assistant message
     st.session_state["messages"].append({"role": "assistant", "content": answer})
     st.rerun()

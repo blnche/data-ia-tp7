@@ -1,0 +1,13 @@
+# Secrets
+.streamlit/secrets.toml
+
+# Base vectorielle (reconstruite au démarrage)
+chroma_sanofi/
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
